@@ -10,6 +10,7 @@
 #include "rtc.h"
 #include "lcd.h"
 #include "sound.h"
+#include "serial.h"
 
 #include "esp_partition.h"
 #include "esp_attr.h"
@@ -262,9 +263,10 @@ void IRAM_ATTR ioreg_write(byte r, byte b)
 		break;
 	case RI_SC:
 		/* FIXME - this is a hack for stupid roms that probe serial */
+		printf("omg writing SC b=%02X sb=%02X\n", b, R_SB);
 		if ((b & 0x81) == 0x81)
 		{
-			R_SB = 0xff;
+			R_SB = serial_exchange(R_SB);
 			hw_interrupt(IF_SERIAL, IF_SERIAL);
 			hw_interrupt(0, IF_SERIAL);
 		}
