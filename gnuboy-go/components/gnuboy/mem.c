@@ -263,10 +263,11 @@ void IRAM_ATTR ioreg_write(byte r, byte b)
 		break;
 	case RI_SC:
 		/* FIXME - this is a hack for stupid roms that probe serial */
-		printf("omg writing SC b=%02X sb=%02X\n", b, R_SB);
+		
 		if ((b & 0x81) == 0x81)
 		{
-			R_SB = serial_exchange(R_SB);
+			printf("omg writing SC b=%02X sb=%02X\n", b, R_SB);
+			serial_exchange();
 			hw_interrupt(IF_SERIAL, IF_SERIAL);
 			hw_interrupt(0, IF_SERIAL);
 		}

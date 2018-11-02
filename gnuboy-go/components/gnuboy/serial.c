@@ -1,37 +1,63 @@
-#pragma GCC optimize ("O3")
 
 #include "serial.h"
 
+#include "regs.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 
-uint8_t test_pin = 12;
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 uint8_t test_channel = 1;
 
 int serial_clock_on = 0;
 
+static int clock_level = 1;
 
-byte serial_exchange(byte send_byte)
-{
-	if (!serial_clock_on) {
-		printf("starting serial clock\n");
-		gpio_set_direction(test_pin, GPIO_MODE_OUTPUT);
-		ledc_channel_config_t ledc_channel = {
-		    .channel    = LEDC_CHANNEL_1,
-		    .duty       = 127,
-		    .gpio_num   = test_pin,
-		    .speed_mode = LEDC_HIGH_SPEED_MODE,
-		    .timer_sel  = LEDC_TIMER_1
-		};
-		ledc_channel_config(&ledc_channel);
-		ledc_timer_config_t ledc_timer = {
-			.duty_resolution = LEDC_TIMER_8_BIT, // resolution of PWM duty
-			.freq_hz = 8000,                      // frequency of PWM signal
-			.speed_mode = LEDC_HIGH_SPEED_MODE,           // timer mode
-			.timer_num = LEDC_TIMER_1 // timer index			
-		};
-		ledc_timer_config(&ledc_timer);
-		serial_clock_on = 1;
+
+void serial_init() {
+
+	gpio_pad_select_gpio(SERIAL_OUT);
+
+	gpio_set_direction(SERIAL_OUT,   GPIO_MODE_OUTPUT);
+	gpio_set_direction(SERIAL_IN,    GPIO_MODE_INPUT);
+	gpio_set_direction(SERIAL_CLOCK, GPIO_MODE_INPUT_OUTPUT);
+
+	gpio_set_level(SERIAL_CLOCK, clock_level);
+}
+
+void serial_clock_low() {
+	int output = (R_SB&0x80)>>7;
+	R_SB <<= 1;
+	printf("serial_clock_low() o=%02X sb=%02X\n", output, R_SB);
+	gpio_set_level(SERIAL_OUT, output);
+}
+
+void serial_clock_high() {
+	int input = gpio_get_level(SERIAL_IN);
+	R_SB |= input;
+	printf("serial_clock_high() i=%02X sb=%02X\n", input, R_SB);
+}
+	
+void serial_task() {
+	serial_init();
+	while(1){
+		
 	}
-		return 0x55;
+}
+
+void serial_exchange()
+{
+	serial_init();
+	int counter = 8;
+	while(counter >= 0) {
+		gpio_set_level(SERIAL_CLOCK, 0);
+		serial_clock_low();
+		vTaskDelay(1);
+		gpio_set_level(SERIAL_CLOCK, 1);
+		serial_clock_high();
+		vTaskDelay(1); //(0.125/portTICK_PERIOD_MS);
+		counter--;
+	}
 }
