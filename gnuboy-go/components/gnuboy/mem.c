@@ -268,6 +268,7 @@ void IRAM_ATTR ioreg_write(byte r, byte b)
 		{
 			printf("omg writing SC b=%02X sb=%02X\n", b, R_SB);
 			serial_exchange();
+			printf("received sb=%02X\n", R_SB);
 			hw_interrupt(IF_SERIAL, IF_SERIAL);
 			hw_interrupt(0, IF_SERIAL);
 		}
