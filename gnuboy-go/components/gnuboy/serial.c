@@ -16,6 +16,7 @@
 #define TIMER_SCALE   (TIMER_BASE_CLK / TIMER_DIVIDER)
 #define FREQUENCY     8000
 #define TIMER_INDEX   1
+#define ESP_INTR_FLAG_DEFAULT 0
 
 
 uint8_t test_channel = 1;
@@ -56,22 +57,33 @@ void serial_clock_low() {
 void serial_clock_high() {
 	int input = gpio_get_level(SERIAL_IN);
 	data |= input;
+	ets_printf("input bit: %01X\n", input);
 	//printf("serial_clock_high() i=%02X sb=%02X\n", input, R_SB);
 }
+
+static xQueueHandle data_event_queue = NULL;
 	
-void IRAM_ATTR timer_isr(void *para) {
+void IRAM_ATTR timer_isr(void *arg) {
+	ets_printf("OMG CLOCK, %02X data: %02X\n", counter, data);
+	int internal_clock = (int) arg; 
 	if (clock_level) {
 		serial_clock_high();
 	} else {
 		serial_clock_low();
 	}
 	clock_level = !clock_level;
-	gpio_set_level(SERIAL_CLOCK, clock_level);
-	TIMERG1.int_clr_timers.t1 = 1;
-	if(counter > 0) {
-		TIMERG1.hw_timer[TIMER_INDEX].config.alarm_en = 1;
+	if(internal_clock){
+		gpio_set_level(SERIAL_CLOCK, clock_level);
+		TIMERG1.int_clr_timers.t1 = 1;
+		if(counter > 0) {
+			TIMERG1.hw_timer[TIMER_INDEX].config.alarm_en = 1;
+		}
+		counter--;
 	}
-	counter--;
+	if (counter == 0) {
+		xQueueSendFromISR(data_event_queue, &internal_clock, NULL);
+	}
+	
 }
 
 void start_serial_timer() {
@@ -86,30 +98,49 @@ void start_serial_timer() {
 	timer_set_counter_value(TIMER_GROUP, TIMER_INDEX, 0x00000000ULL);
 	timer_set_alarm_value(TIMER_GROUP, TIMER_INDEX, TIMER_SCALE / FREQUENCY / 2);
 	timer_enable_intr(TIMER_GROUP, TIMER_INDEX);
-	timer_isr_register(TIMER_GROUP, TIMER_INDEX, timer_isr, (void*) TIMER_INDEX, ESP_INTR_FLAG_IRAM, NULL);
+	timer_isr_register(TIMER_GROUP, TIMER_INDEX, timer_isr, (void*) 1, ESP_INTR_FLAG_IRAM, NULL);
 	
 	timer_start(TIMER_GROUP, TIMER_INDEX);
 }
 
 void serial_event_task() {
 	while(1){
-		timer_event_t test;
-		xQueueReceive(timer_queue, &test, portMAX_DELAY);
-		printf("OMG EVENT!!\n");
+		int test;
+		xQueueReceive(data_event_queue, &test, portMAX_DELAY);
+		printf("OMG EVENT!! data: %02X\n", data);
 	}
 }
 
-void serial_exchange()
+void external_interupt_init() {
+//	gpio_config_t clock_in_conf;
+//	clock_in_conf.intr_type = GPIO_PIN_INTR_ANYEGDE;
+//	clock_in_conf.pin_bit_mask = SERIAL_CLOCK;
+//	gpio_config(&clock_in_conf);
+	printf("Setting up external interrupt...\n");
+	data_event_queue = xQueueCreate(10, sizeof(int));
+	gpio_set_intr_type(SERIAL_CLOCK, GPIO_INTR_ANYEDGE);
+	gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+	gpio_isr_handler_add(SERIAL_CLOCK, timer_isr, (void*) 0);
+	xTaskCreate(serial_event_task, "serial_event_task", 2048, NULL, 10, NULL);
+}
+
+void serial_exchange(int use_internal_clock)
 {
 	serial_init();
-	counter = 8*2;
-	data = R_SB;
-	start_serial_timer();
-	//xTaskCreate(serial_event_task, "serial_event_task", 2048, NULL, 5, NULL);
-	//timer_event_t test;
-	//xQueueReceive(timer_queue, &test, portMAX_DELAY);
-	vTaskDelay(1);
-	printf("OMG data:%02X!!\n", data);
-	R_SB = data;
+	counter = 8*2-1;
+	if(use_internal_clock){
+		data = R_SB;
+		start_serial_timer();
+		//xTaskCreate(serial_event_task, "serial_event_task", 2048, NULL, 5, NULL);
+		//timer_event_t test;
+		//xQueueReceive(timer_queue, &test, portMAX_DELAY);
+		vTaskDelay(1);
+		printf("OMG data:%02X!!\n", data);
+		R_SB = data;
+	} else {
+		external_interupt_init();
+		
+	}
+
 	return;
 }
