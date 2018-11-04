@@ -26,6 +26,7 @@
 #include "../components/gnuboy/pcm.h"
 #include "../components/gnuboy/regs.h"
 #include "../components/gnuboy/rtc.h"
+#include "../components/gnuboy/serial.h"
 #include "../components/gnuboy/gnuboy.h"
 
 #include <string.h>
@@ -523,6 +524,9 @@ void app_main(void)
 
     xTaskCreatePinnedToCore(&videoTask, "videoTask", 1024, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(&audioTask, "audioTask", 2048, NULL, 5, NULL, 1); //768
+
+    // Serial
+    serial_init();
 
 
     //debug_trace = 1;
