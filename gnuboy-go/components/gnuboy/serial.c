@@ -17,7 +17,7 @@
 #define TIMER_GROUP TIMER_GROUP_1
 #define TIMER_DIVIDER 1024
 #define TIMER_SCALE   (TIMER_BASE_CLK / TIMER_DIVIDER)
-#define FREQUENCY     800
+#define FREQUENCY     8000
 #define TIMER_INDEX   1
 #define ESP_INTR_FLAG_DEFAULT 0
 
@@ -29,7 +29,9 @@ int serial_clock_on = 0;
 volatile int clock_level = 1;
 volatile int clock_counter = 0;
 volatile int data_counter = 0;
+volatile int falling_edge_done = 0;
 static int data = 0;
+static int generate_clock = 0;
 
 static xQueueHandle input_queue  = NULL;
 static xQueueHandle output_queue = NULL;
@@ -48,7 +50,10 @@ void serial_init() {
 
 	input_queue = xQueueCreate(8, sizeof(int));
 	output_queue = xQueueCreate(8, sizeof(int));
-	
+
+	falling_edge_done = 0;
+	data_counter = 8;
+	data = 0;
 }
 
 void serial_clock_low() {
@@ -68,8 +73,9 @@ void IRAM_ATTR timer_isr(void *arg) {
 	int internal_clock = (int) arg; 
 	clock_level = !clock_level;
 	if (clock_level) {
-		serial_clock_high();
+		if (falling_edge_done) serial_clock_high();
 	} else {
+		falling_edge_done = 1;
 		serial_clock_low();
 	}
 	if(internal_clock){
@@ -78,7 +84,7 @@ void IRAM_ATTR timer_isr(void *arg) {
 		if(clock_counter > 1) {
 			TIMERG1.hw_timer[TIMER_INDEX].config.alarm_en = 1;
 		}
-	clock_counter--;	
+		clock_counter--;	
 	}
 	
 }
@@ -101,12 +107,14 @@ void start_serial_timer() {
 }
 
 void clean_up(){
-	gpio_isr_handler_remove(SERIAL_CLOCK);
-	gpio_uninstall_isr_service();
+	if(!generate_clock){
+		gpio_isr_handler_remove(SERIAL_CLOCK);
+		gpio_uninstall_isr_service();
+	}
 	R_SC &= 0x7f;
 	
-	vTaskDelay(100);
-	gpio_set_level(SERIAL_OUT, 1); // This should be done with the last serial tick
+	// vTaskDelay(100);
+	// gpio_set_level(SERIAL_OUT, 1); // This should be done with the last serial tick
 }
 
 void input_handler_task() {
@@ -123,6 +131,7 @@ void input_handler_task() {
 			hw_interrupt(IF_SERIAL, IF_SERIAL);
 			hw_interrupt(0, IF_SERIAL);
 			clean_up();
+			vTaskDelete(NULL);
 		}
 		data_counter--;
 	}
@@ -143,7 +152,6 @@ void fill_output_queue(int data){
 	for (int a = 0; a < 8; a++) {
 		int bit = (data&0x80)>>7;
 		data <<= 1;
-		printf("Send bit: %01X\n", bit);
 		xQueueSend(output_queue, &bit, NULL);
 	}
 }
@@ -151,10 +159,9 @@ void fill_output_queue(int data){
 void serial_exchange(int use_internal_clock)
 {
 	serial_init();
-	data_counter = 8;
-	data = 0;
 	printf("Send byte: %02X\n", R_SB);
 	fill_output_queue(R_SB);
+	generate_clock = use_internal_clock;
 	if(use_internal_clock){
 		clock_counter = 8*2;
 		gpio_set_direction(SERIAL_CLOCK, GPIO_MODE_OUTPUT);
