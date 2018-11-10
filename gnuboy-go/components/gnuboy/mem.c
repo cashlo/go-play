@@ -262,17 +262,18 @@ void IRAM_ATTR ioreg_write(byte r, byte b)
 		pad_refresh();
 		break;
 	case RI_SC:
-		/* FIXME - this is a hack for stupid roms that probe serial */
+		// printf("Writing to SC b=%02X SB=%02X SC=%02X\n", b, R_SB, R_SC);
 		if (R_SC == b) break;
+		R_SC = b;
 		if ((b & 0x80) == 0x80)
 		{
-			printf("omg writing SC b=%02X sb=%02X\n", b, R_SB);
+			printf("Serial start SB=%02X SC=%02X\n", R_SB, R_SC);
 			int use_internal_clock = (b & 0x01) == 0x01;
 			serial_exchange(use_internal_clock);
 		}
-		R_SC = b; /* & 0x7f; */
 		break;
 	case RI_SB:
+		//printf("Writing SB b=%02X SB=%02X\n", b, R_SB);
 		REG(r) = b;
 		break;
 	case RI_DIV:
