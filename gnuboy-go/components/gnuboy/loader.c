@@ -4,6 +4,8 @@
 #include <time.h>
 #include <ctype.h>
 
+#include "spi_flash_mmap.h"
+
 #include "esp_partition.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
@@ -220,7 +222,7 @@ int rom_load()
 			esp_err_t err = esp_partition_read(part, offset, (void *)(data + offset), 0x100000);
 			if (err != ESP_OK)
 			{
-				printf("esp_partition_read failed. size = %x, offset = %x (%d)\n", part->size, offset, err);
+				printf("esp_partition_read failed. size = %lx, offset = %x (%d)\n", part->size, offset, err);
 				abort();
 			}
 		}
@@ -354,8 +356,8 @@ int rom_load()
 		if (rlen <= (0x100000 * 3) &&
 			sram_length <= 0x100000)
 		{
-			ram.sbank = data + (0x100000 * 3);
-			printf("SRAM using PSRAM.\n");
+			ram.sbank = (byte (*)[8192])(data + (0x100000 * 3)); // cast to match expected type
+        	printf("SRAM using PSRAM.\n");
 		}
 		else
 		{
@@ -523,7 +525,7 @@ void loader_unload()
 	if (romfile) free(romfile);
 	if (sramfile) free(sramfile);
 	if (saveprefix) free(saveprefix);
-	if (rom.bank) free(rom.bank);
+	free(rom.bank);
 	if (ram.sbank) free(ram.sbank);
 	romfile = sramfile = saveprefix = 0;
 	rom.bank[0] = 0;
@@ -535,7 +537,7 @@ void loader_unload()
 static char *base(char *s)
 {
 	char *p;
-	p = (char *) strrchr((unsigned char)s, DIRSEP_CHAR);
+	p = strrchr(s, DIRSEP_CHAR);
 	if (p) return p+1;
 	return s;
 }

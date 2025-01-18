@@ -219,7 +219,8 @@ void odroid_audio_submit(short* stereoAudioBuffer, int frameCount)
         }
 
         int len = currentAudioSampleCount * sizeof(int16_t);
-        int count = i2s_write_bytes(I2S_NUM, (const char *)stereoAudioBuffer, len, portMAX_DELAY);
+        size_t count = 0;
+        i2s_write(I2S_NUM, (const char *)stereoAudioBuffer, len, &count, portMAX_DELAY);
         if (count != len)
         {
             printf("i2s_write_bytes: count (%d) != len (%d)\n", count, len);
@@ -242,10 +243,11 @@ void odroid_audio_submit(short* stereoAudioBuffer, int frameCount)
             stereoAudioBuffer[i] = (short)sample;
         }
 
-        int count = i2s_write_bytes(I2S_NUM, (const char *)stereoAudioBuffer, len, portMAX_DELAY);
+        size_t count;
+        i2s_write(I2S_NUM, (const char *)stereoAudioBuffer, len, &count, portMAX_DELAY);
         if (count != len)
         {
-            printf("i2s_write_bytes: count (%d) != len (%d)\n", count, len);
+            printf("i2s_write: count (%d) != len (%d)\n", count, len);
             abort();
         }
     }

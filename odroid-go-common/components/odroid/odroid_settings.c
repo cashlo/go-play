@@ -20,6 +20,10 @@ static const char* NvsKey_StartAction = "StartAction";
 static const char* NvsKey_ScaleDisabled = "ScaleDisabled";
 static const char* NvsKey_AudioSink = "AudioSink";
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat"
+#pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 
 char* odroid_util_GetFileName(const char* path)
 {
@@ -489,3 +493,5 @@ void odroid_settings_AudioSink_set(ODROID_AUDIO_SINK value)
     // Close
     nvs_close(my_handle);
 }
+
+#pragma GCC diagnostic pop

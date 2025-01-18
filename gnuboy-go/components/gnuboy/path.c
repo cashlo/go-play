@@ -17,7 +17,9 @@ char *path_search(char *name, char *mode, char *path)
 	char *p, *n;
 	int l;
 
-	if (buf) free(buf); buf = 0;
+	if (buf)
+		free(buf);
+	buf = 0;
 	if (!path || !*path || *name == DIRSEP_CHAR)
 		return (buf = strdup(name));
 
@@ -25,13 +27,16 @@ char *path_search(char *name, char *mode, char *path)
 
 	for (p = path; *p; p += l)
 	{
-		if (*p == SEP) p++;
+		if (*p == SEP)
+			p++;
 		n = strchr(p, SEP);
-		if (n) l = n - p;
-		else l = strlen(p);
+		if (n)
+			l = n - p;
+		else
+			l = strlen(p);
 		strncpy(buf, p, l);
 		buf[l] = DIRSEP_CHAR;
-		strcpy(buf+l+1, name);
+		strcpy(buf + l + 1, name);
 		if ((f = fopen(buf, mode)))
 		{
 			fclose(f);
@@ -40,4 +45,3 @@ char *path_search(char *name, char *mode, char *path)
 	}
 	return name;
 }
-

@@ -12,6 +12,7 @@
 #include "esp_adc_cal.h"
 #include "esp_task_wdt.h"
 #include "esp_spiffs.h"
+#include "esp_sleep.h"
 #include "driver/rtc_io.h"
 #include "esp_partition.h"
 #include "esp_ota_ops.h"
@@ -51,7 +52,7 @@ uint8_t currentBuffer;
 
 uint16_t* framebuffer;
 int frame = 0;
-uint elapsedTime = 0;
+int elapsedTime = 0;
 
 int32_t* audioBuffer[2];
 volatile uint8_t currentAudioBuffer = 0;
@@ -84,6 +85,13 @@ int pcm_submit()
 
 
 int BatteryPercent = 100;
+
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+#pragma GCC diagnostic ignored "-Wint-conversion"
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+
 
 
 void run_to_vblank()
@@ -349,7 +357,7 @@ static void LoadState(const char* cartName)
 
 static void PowerDown()
 {
-    uint16_t* param = 1;
+    uint16_t* param;
 
     // Clear audio to prevent studdering
     printf("PowerDown: stopping audio.\n");
@@ -383,7 +391,7 @@ static void PowerDown()
 static void DoMenuHome()
 {
     esp_err_t err;
-    uint16_t* param = 1;
+    uint16_t* param;
 
     // Clear audio to prevent studdering
     printf("PowerDown: stopping audio.\n");
@@ -416,8 +424,6 @@ static void DoMenuHome()
 
 void app_main(void)
 {
-    printf("gnuboy (%s-%s).\n", COMPILEDATE, GITREV);
-
     nvs_flash_init();
 
     odroid_system_init();
@@ -578,13 +584,13 @@ void app_main(void)
     LoadState(rom.name);
 
 
-    uint startTime;
-    uint stopTime;
-    uint totalElapsedTime = 0;
-    uint actualFrameCount = 0;
+    int startTime;
+    int stopTime;
+    int totalElapsedTime = 0;
+    int actualFrameCount = 0;
     odroid_gamepad_state lastJoysticState;
 
-    ushort menuButtonFrameCount = 0;
+    short menuButtonFrameCount = 0;
     bool ignoreMenuButton = lastJoysticState.values[ODROID_INPUT_MENU];
 
     // Reset if button held at startup
@@ -689,10 +695,12 @@ void app_main(void)
           float seconds = totalElapsedTime / (CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ * 1000000.0f); // 240000000.0f; // (240Mhz)
           float fps = actualFrameCount / seconds;
 
-          //printf("HEAP:0x%x, FPS:%f, BATTERY:%d [%d]\n", esp_get_free_heap_size(), fps, battery_state.millivolts, battery_state.percentage);
+          printf("HEAP:0x%lx, FPS:%f, BATTERY:%d [%d]\n", esp_get_free_heap_size(), fps, battery_state.millivolts, battery_state.percentage);
 
           actualFrameCount = 0;
           totalElapsedTime = 0;
         }
     }
 }
+
+#pragma GCC diagnostic pop

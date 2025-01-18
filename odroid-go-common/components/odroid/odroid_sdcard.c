@@ -15,7 +15,6 @@
 #include <ctype.h>
 
 
-
 #define SD_PIN_NUM_MISO 19
 #define SD_PIN_NUM_MOSI 23
 #define SD_PIN_NUM_CLK  18
@@ -24,48 +23,47 @@
 
 static bool isOpen = false;
 
-
 esp_err_t odroid_sdcard_open(const char* base_path)
 {
     esp_err_t ret;
 
     if (isOpen)
     {
-        printf("odroid_sdcard_open: alread open.\n");
+        printf("odroid_sdcard_open: already open.\n");
         ret = ESP_FAIL;
     }
     else
     {
         sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    	host.slot = HSPI_HOST; // HSPI_HOST;
-    	//host.max_freq_khz = SDMMC_FREQ_HIGHSPEED; //10000000;
+        host.slot = HSPI_HOST;
         host.max_freq_khz = SDMMC_FREQ_DEFAULT;
 
-    	sdspi_slot_config_t slot_config = SDSPI_SLOT_CONFIG_DEFAULT();
-    	slot_config.gpio_miso = (gpio_num_t)SD_PIN_NUM_MISO;
-    	slot_config.gpio_mosi = (gpio_num_t)SD_PIN_NUM_MOSI;
-    	slot_config.gpio_sck  = (gpio_num_t)SD_PIN_NUM_CLK;
-    	slot_config.gpio_cs = (gpio_num_t)SD_PIN_NUM_CS;
-    	//slot_config.dma_channel = 2;
+        // SPI bus configuration
+        spi_bus_config_t bus_config = {
+            .mosi_io_num = SD_PIN_NUM_MOSI,
+            .miso_io_num = SD_PIN_NUM_MISO,
+            .sclk_io_num = SD_PIN_NUM_CLK,
+            .quadwp_io_num = -1,
+            .quadhd_io_num = -1,
+            .max_transfer_sz = 4000,
+        };
 
-    	// Options for mounting the filesystem.
-    	// If format_if_mount_failed is set to true, SD card will be partitioned and
-    	// formatted in case when mounting fails.
-    	esp_vfs_fat_sdmmc_mount_config_t mount_config;
+        // SDSPI device configuration
+        sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+        slot_config.gpio_cs = SD_PIN_NUM_CS;
+        slot_config.host_id = host.slot;
+
+        // Options for mounting the filesystem
+        esp_vfs_fat_sdmmc_mount_config_t mount_config;
         memset(&mount_config, 0, sizeof(mount_config));
+        mount_config.format_if_mount_failed = false;
+        mount_config.max_files = 5;
 
-    	mount_config.format_if_mount_failed = false;
-    	mount_config.max_files = 5;
+        // Mount FAT filesystem
+        sdmmc_card_t* card;
+        ret = esp_vfs_fat_sdspi_mount(base_path, &host, &slot_config, &mount_config, &card);
 
-
-    	// Use settings defined above to initialize SD card and mount FAT filesystem.
-    	// Note: esp_vfs_fat_sdmmc_mount is an all-in-one convenience function.
-    	// Please check its source code and implement error recovery when developing
-    	// production applications.
-    	sdmmc_card_t* card;
-    	ret = esp_vfs_fat_sdmmc_mount(base_path, &host, &slot_config, &mount_config, &card);
-
-    	if (ret == ESP_OK)
+        if (ret == ESP_OK)
         {
             isOpen = true;
         }
@@ -75,9 +73,8 @@ esp_err_t odroid_sdcard_open(const char* base_path)
         }
     }
 
-	return ret;
+    return ret;
 }
-
 
 esp_err_t odroid_sdcard_close()
 {
