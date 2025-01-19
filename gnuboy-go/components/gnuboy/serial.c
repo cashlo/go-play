@@ -10,13 +10,14 @@
 #include "driver/gptimer.h"
 #include "esp32/rom/gpio.h"
 
+#include "esp_log.h"
 
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 
-#define FREQUENCY     400
+#define FREQUENCY     8192
 #define ESP_INTR_FLAG_DEFAULT 0
 #define TIMER_RESOLUTION_HZ     1000000  // 1MHz resolution
 #define TIMER_PERIOD_TICKS      (TIMER_RESOLUTION_HZ / FREQUENCY / 2)
@@ -45,8 +46,12 @@ void serial_init() {
 	clock_level = 1;
 	ESP_ERROR_CHECK(gpio_set_level(SERIAL_CLOCK, clock_level));
 
-	input_queue = xQueueCreate(8, sizeof(int));
-	output_queue = xQueueCreate(8, sizeof(int));
+    if (input_queue == NULL) {
+        input_queue = xQueueCreate(8, sizeof(int));
+    }
+    if (output_queue == NULL) {
+        output_queue = xQueueCreate(8, sizeof(int));
+    }
 
 	falling_edge_done = 0;
 	data_counter = 8;
@@ -55,14 +60,19 @@ void serial_init() {
 
 void serial_clock_low() {
 	int output_bit;
-	xQueueReceiveFromISR(output_queue, &output_bit, NULL);
+	if (xQueueReceiveFromISR(output_queue, &output_bit, NULL) != pdTRUE) {
+        ESP_EARLY_LOGE("SERIAL", "Queue receive failed in ISR");
+        output_bit = 1;  // Default to high if queue empty
+    }
 	//printf("serial_clock_low() o=%02X sb=%02X\n", output, R_SB);
 	ESP_ERROR_CHECK(gpio_set_level(SERIAL_OUT, output_bit));
 }
 
 void serial_clock_high() {
 	int input_bit = gpio_get_level(SERIAL_IN);
-	xQueueSendFromISR(input_queue, &input_bit, (TickType_t) 0);
+	if (xQueueSendFromISR(input_queue, &input_bit, (TickType_t) 0) != pdTRUE) {
+      	ESP_EARLY_LOGE("SERIAL", "Queue send failed in ISR");
+    }
 	//printf("serial_clock_high() i=%02X sb=%02X\n", input, R_SB);
 }
 
@@ -134,8 +144,8 @@ void clean_up(){
         gptimer_del_timer(gptimer);
         gptimer = NULL;
     }
-	vQueueDelete(input_queue);
-	vQueueDelete(output_queue);
+    xQueueReset(input_queue);
+    xQueueReset(output_queue);
 	R_SC &= 0x7f;
 	
 	
@@ -144,10 +154,21 @@ void clean_up(){
 }
 
 void input_handler_task() {
-	printf("Handler started...\n");
+	// printf("Handler started...\n");
 	while(1){
 		int input_bit;
-		xQueueReceive(input_queue, &input_bit, portMAX_DELAY);
+		BaseType_t queue_result = xQueueReceive(input_queue, &input_bit, portMAX_DELAY);
+		        
+        if (queue_result != pdTRUE) {
+            printf("Queue receive error\n");
+            break;  // Exit task if queue error
+        }
+
+        if (data_counter <= 0) {
+            printf("Data counter error\n");
+            break;
+        }
+
 		//printf("Serial bit received: %01X, data_counter:%02X\n", input_bit, data_counter);
 		data <<= 1;
 		data |= input_bit;
@@ -157,7 +178,7 @@ void input_handler_task() {
 			clean_up();
 			hw_interrupt(IF_SERIAL, IF_SERIAL);
 			hw_interrupt(0, IF_SERIAL);
-			printf("Destorying handler...\n");
+			// printf("Destorying handler...\n");
 			vTaskDelete(NULL);
 		}
 		data_counter--;
@@ -185,7 +206,7 @@ void external_interupt_init() {
 	printf("Setting up external interrupt...\n");
 	ESP_ERROR_CHECK(gpio_set_intr_type(SERIAL_CLOCK, GPIO_INTR_ANYEDGE));
 	if (!gpio_isr_service_running) {
-		gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+		ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT));
 		gpio_isr_service_running = 1;
 	}
 	ESP_ERROR_CHECK(gpio_isr_handler_add(SERIAL_CLOCK, gpio_isr_handler, (void*) 0));
@@ -199,8 +220,17 @@ void fill_output_queue(int data){
 	}
 }
 
+static void print_memory_info() {
+    multi_heap_info_t info;
+    heap_caps_get_info(&info, MALLOC_CAP_INTERNAL);
+    printf("Free heap: %d, Largest block: %d\n", 
+           heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
+
 void serial_exchange(int use_internal_clock)
 {
+	//print_memory_info();
 	serial_init();
 	//printf("Send byte: %02X\n", R_SB);
 	//printf("Serial Starting, RAM left %d\n", esp_get_free_heap_size());
