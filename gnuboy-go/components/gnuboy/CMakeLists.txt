@@ -24,6 +24,7 @@ idf_component_register(
     "refresh.c"
     "rtc.c"
     "save.c"
+    "serial.c"
     "sound.c"
     "split.c"
     INCLUDE_DIRS "."

@@ -7,19 +7,19 @@
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
-#include "driver/timer.h"
+#include "driver/gptimer.h"
+#include "esp32/rom/gpio.h"
+
 
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 
-#define TIMER_GROUP TIMER_GROUP_1
-#define TIMER_DIVIDER 1024
-#define TIMER_SCALE   (TIMER_BASE_CLK / TIMER_DIVIDER)
 #define FREQUENCY     400
-#define TIMER_INDEX   1
 #define ESP_INTR_FLAG_DEFAULT 0
+#define TIMER_RESOLUTION_HZ     1000000  // 1MHz resolution
+#define TIMER_PERIOD_TICKS      (TIMER_RESOLUTION_HZ / FREQUENCY / 2)
 
 
 volatile int clock_level = 1;
@@ -30,8 +30,8 @@ static int data = 0;
 static int generate_clock = 0;
 static int gpio_isr_service_running = 0;
 
-static xQueueHandle input_queue  = NULL;
-static xQueueHandle output_queue = NULL;
+static QueueHandle_t input_queue  = NULL;
+static QueueHandle_t output_queue = NULL;
 
 void serial_init() {
 
@@ -65,42 +65,62 @@ void serial_clock_high() {
 	xQueueSendFromISR(input_queue, &input_bit, (TickType_t) 0);
 	//printf("serial_clock_high() i=%02X sb=%02X\n", input, R_SB);
 }
-	
-void IRAM_ATTR timer_isr(void *arg) {
-	int internal_clock = (int) arg; 
-	clock_level = !clock_level;
-	if (clock_level) {
-		if (falling_edge_done) serial_clock_high();
-	} else {
-		falling_edge_done = 1;
-		serial_clock_low();
-	}
-	if(internal_clock){
-		gpio_set_level(SERIAL_CLOCK, clock_level);
-		TIMERG1.int_clr_timers.t1 = 1;
-		if(clock_counter > 1) {
-			TIMERG1.hw_timer[TIMER_INDEX].config.alarm_en = 1;
-		}
-		clock_counter--;	
-	}
-	
+
+static gptimer_handle_t gptimer = NULL;
+
+// New timer callback function
+static bool IRAM_ATTR timer_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx) {
+    int internal_clock = (int)user_ctx;
+    clock_level = !clock_level;
+    
+    if (clock_level) {
+        if (falling_edge_done) serial_clock_high();
+    } else {
+        falling_edge_done = 1;
+        serial_clock_low();
+    }
+    
+    if (internal_clock) {
+        gpio_set_level(SERIAL_CLOCK, clock_level);
+        if (clock_counter > 1) {
+            // Timer will continue running
+            clock_counter--;
+            return true;
+        } else {
+            // Stop timer
+            clock_counter--;
+            return false;
+        }
+    }
+    return true;
 }
 
 void start_serial_timer() {
-	timer_config_t config;
-	config.divider = TIMER_DIVIDER;
-	config.counter_dir = TIMER_COUNT_UP;
-	config.counter_en = TIMER_PAUSE;
-	config.alarm_en = TIMER_ALARM_EN;
-	config.intr_type = TIMER_INTR_LEVEL;
-	config.auto_reload = 1;
-	timer_init(TIMER_GROUP, TIMER_INDEX, &config);
-	timer_set_counter_value(TIMER_GROUP, TIMER_INDEX, 0x00000000ULL);
-	timer_set_alarm_value(TIMER_GROUP, TIMER_INDEX, TIMER_SCALE / FREQUENCY / 2);
-	timer_enable_intr(TIMER_GROUP, TIMER_INDEX);
-	timer_isr_register(TIMER_GROUP, TIMER_INDEX, timer_isr, (void*) 1, ESP_INTR_FLAG_IRAM, NULL);
-	
-	timer_start(TIMER_GROUP, TIMER_INDEX);
+    // Timer configuration
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = TIMER_RESOLUTION_HZ,
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+
+    // Alarm configuration
+    gptimer_alarm_config_t alarm_config = {
+        .reload_count = 0,
+        .alarm_count = TIMER_PERIOD_TICKS,
+        .flags.auto_reload_on_alarm = true,
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config));
+
+    // Register timer interrupt handler
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = timer_callback,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, (void*)1));
+
+    // Enable and start timer
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
 }
 
 void clean_up(){
@@ -108,7 +128,12 @@ void clean_up(){
 		printf("Stopping external interrupt...\n");
 		ESP_ERROR_CHECK(gpio_isr_handler_remove(SERIAL_CLOCK));
 		//gpio_uninstall_isr_service();
-	}
+	} else if (gptimer) {
+        gptimer_stop(gptimer);
+        gptimer_disable(gptimer);
+        gptimer_del_timer(gptimer);
+        gptimer = NULL;
+    }
 	vQueueDelete(input_queue);
 	vQueueDelete(output_queue);
 	R_SC &= 0x7f;
@@ -139,6 +164,19 @@ void input_handler_task() {
 	}
 }
 
+static void IRAM_ATTR gpio_isr_handler(void* arg) {
+    int internal_clock = (int) arg;
+    clock_level = !clock_level;
+    
+    if (clock_level) {
+        if (falling_edge_done) serial_clock_high();
+    } else {
+        falling_edge_done = 1;
+        serial_clock_low();
+    }
+}
+
+
 void external_interupt_init() {
 //	gpio_config_t clock_in_conf;
 //	clock_in_conf.intr_type = GPIO_PIN_INTR_ANYEGDE;
@@ -150,7 +188,7 @@ void external_interupt_init() {
 		gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
 		gpio_isr_service_running = 1;
 	}
-	ESP_ERROR_CHECK(gpio_isr_handler_add(SERIAL_CLOCK, timer_isr, (void*) 0));
+	ESP_ERROR_CHECK(gpio_isr_handler_add(SERIAL_CLOCK, gpio_isr_handler, (void*) 0));
 }
 
 void fill_output_queue(int data){
