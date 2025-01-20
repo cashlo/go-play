@@ -17,6 +17,8 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 
+#include "hw.h"
+
 #define FREQUENCY     8192
 #define ESP_INTR_FLAG_DEFAULT 0
 #define TIMER_RESOLUTION_HZ     1000000  // 1MHz resolution
@@ -39,6 +41,16 @@ static QueueHandle_t output_queue = NULL;
 static TaskHandle_t current_handler_task = NULL;
 
 static volatile bool serial_transfer_in_progress = false;
+
+void print_register(){
+	printf("Registers - R_SB:%02X R_SC:%02X R_IF:%02X R_IE:%02X ilines:%02X\n", 
+       R_SB,        // Serial transfer data
+       R_SC,        // Serial Control
+       R_IF,        // Interrupt Flag
+       R_IE,        // Interrupt Enable
+       hw.ilines    // Interrupt lines state
+);
+}
 
 void serial_init() {
 
@@ -162,7 +174,9 @@ void clean_up(){
     xQueueReset(output_queue);
 
 	serial_transfer_in_progress = false;
-	
+
+	// Print relevant registers
+	// print_register();
     // If there's an existing handler task, delete it
     if (current_handler_task != NULL) {
         vTaskDelete(current_handler_task);
@@ -196,17 +210,20 @@ void input_handler_task() {
             break;
         }
 
-		printf("Serial bit received: %01X, data_counter:%02X, internal_counter:%03X, this_handler_id:%03X\n", input_bit, data_counter, internal_counter, this_handler_id);
+		// printf("Serial bit received: %01X, data_counter:%02X, internal_counter:%03X, this_handler_id:%03X\n", input_bit, data_counter, internal_counter, this_handler_id);
 		data <<= 1;
 		data |= input_bit;
 		if(data_counter == 1) {
 			printf("Complete byte received: %02X\n", data);
 			R_SB = data;
 			hw_interrupt(IF_SERIAL, IF_SERIAL);
+			// Print relevant registers
+			// print_register();
 			R_SC &= 0x7f;
+			hw_interrupt(0, IF_SERIAL);
 			clean_up();
 			
-			//hw_interrupt(0, IF_SERIAL);
+			
 		}
 		data_counter--;
 		internal_counter++;
@@ -260,6 +277,10 @@ static void print_memory_info() {
 
 void serial_exchange(int use_internal_clock)
 {
+
+	// Print relevant registers
+	// print_register();
+
 	if (serial_transfer_in_progress) {
         ESP_LOGE("SERIAL", "Serial transfer already in progress");
 		clean_up();
