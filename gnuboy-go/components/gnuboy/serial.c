@@ -23,16 +23,22 @@
 #define TIMER_PERIOD_TICKS      (TIMER_RESOLUTION_HZ / FREQUENCY / 2)
 
 
-volatile int clock_level = 1;
-volatile int clock_counter = 0;
-volatile int data_counter = 0;
-volatile int falling_edge_done = 0;
+static volatile int clock_level;
+static volatile int clock_counter;
+static volatile int data_counter;
+static volatile int falling_edge_done;
+static volatile int edge_counter;
+static volatile int handler_id;
 static int data = 0;
 static int generate_clock = 0;
 static int gpio_isr_service_running = 0;
 
 static QueueHandle_t input_queue  = NULL;
 static QueueHandle_t output_queue = NULL;
+
+static TaskHandle_t current_handler_task = NULL;
+
+static volatile bool serial_transfer_in_progress = false;
 
 void serial_init() {
 
@@ -55,25 +61,32 @@ void serial_init() {
 
 	falling_edge_done = 0;
 	data_counter = 8;
+	edge_counter = 8;
 	data = 0;
 }
 
 void serial_clock_low() {
-	int output_bit;
-	if (xQueueReceiveFromISR(output_queue, &output_bit, NULL) != pdTRUE) {
-        ESP_EARLY_LOGE("SERIAL", "Queue receive failed in ISR");
-        output_bit = 1;  // Default to high if queue empty
-    }
-	//printf("serial_clock_low() o=%02X sb=%02X\n", output, R_SB);
+	int output_bit = 1;
+	if (edge_counter > 0){
+		if (xQueueReceiveFromISR(output_queue, &output_bit, NULL) != pdTRUE) {
+			ESP_EARLY_LOGE("SERIAL", "Queue receive failed in ISR");
+		}
+		ESP_EARLY_LOGE("SERIAL", "Setting output bit: %d, bit %d", output_bit, edge_counter);
+		//printf("serial_clock_low() o=%02X sb=%02X\n", output, R_SB);
+	}
 	ESP_ERROR_CHECK(gpio_set_level(SERIAL_OUT, output_bit));
 }
 
 void serial_clock_high() {
-	int input_bit = gpio_get_level(SERIAL_IN);
-	if (xQueueSendFromISR(input_queue, &input_bit, (TickType_t) 0) != pdTRUE) {
-      	ESP_EARLY_LOGE("SERIAL", "Queue send failed in ISR");
-    }
-	//printf("serial_clock_high() i=%02X sb=%02X\n", input, R_SB);
+	if (edge_counter > 0){
+		int input_bit = gpio_get_level(SERIAL_IN);
+		if (xQueueSendFromISR(input_queue, &input_bit, (TickType_t) 0) != pdTRUE) {
+			ESP_EARLY_LOGE("SERIAL", "Queue send failed in ISR");
+		}
+		edge_counter--;
+		ESP_EARLY_LOGE("SERIAL", "Input bit: %d, %d bits remaining", input_bit, edge_counter);
+		//printf("serial_clock_high() i=%02X sb=%02X\n", input, R_SB);
+	}
 }
 
 static gptimer_handle_t gptimer = NULL;
@@ -134,6 +147,7 @@ void start_serial_timer() {
 }
 
 void clean_up(){
+	printf("Clean up\n");
 	if(!generate_clock){
 		printf("Stopping external interrupt...\n");
 		ESP_ERROR_CHECK(gpio_isr_handler_remove(SERIAL_CLOCK));
@@ -146,15 +160,28 @@ void clean_up(){
     }
     xQueueReset(input_queue);
     xQueueReset(output_queue);
-	R_SC &= 0x7f;
+
+	serial_transfer_in_progress = false;
 	
+    // If there's an existing handler task, delete it
+    if (current_handler_task != NULL) {
+        vTaskDelete(current_handler_task);
+        current_handler_task = NULL;
+        // Give the system a moment to clean up
+        // vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+
 	
 	// vTaskDelay(100);
 	// gpio_set_level(SERIAL_OUT, 1); // This should be done with the last serial tick
 }
 
 void input_handler_task() {
-	// printf("Handler started...\n");
+	printf("Handler started...\n");
+	int internal_counter = 0;
+	int this_handler_id = handler_id;
+	handler_id++;
 	while(1){
 		int input_bit;
 		BaseType_t queue_result = xQueueReceive(input_queue, &input_bit, portMAX_DELAY);
@@ -169,20 +196,23 @@ void input_handler_task() {
             break;
         }
 
-		//printf("Serial bit received: %01X, data_counter:%02X\n", input_bit, data_counter);
+		printf("Serial bit received: %01X, data_counter:%02X, internal_counter:%03X, this_handler_id:%03X\n", input_bit, data_counter, internal_counter, this_handler_id);
 		data <<= 1;
 		data |= input_bit;
 		if(data_counter == 1) {
 			printf("Complete byte received: %02X\n", data);
 			R_SB = data;
-			clean_up();
 			hw_interrupt(IF_SERIAL, IF_SERIAL);
-			hw_interrupt(0, IF_SERIAL);
-			// printf("Destorying handler...\n");
-			vTaskDelete(NULL);
+			R_SC &= 0x7f;
+			clean_up();
+			
+			//hw_interrupt(0, IF_SERIAL);
 		}
 		data_counter--;
+		internal_counter++;
 	}
+	current_handler_task = NULL;  // Clear handle if we break from loop
+    vTaskDelete(NULL);
 }
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
@@ -230,9 +260,17 @@ static void print_memory_info() {
 
 void serial_exchange(int use_internal_clock)
 {
+	if (serial_transfer_in_progress) {
+        ESP_LOGE("SERIAL", "Serial transfer already in progress");
+		clean_up();
+		vTaskDelay(pdMS_TO_TICKS(1));  // Give a tiny bit of time for cleanup
+        //return;
+    }
+    
+    serial_transfer_in_progress = true;
 	//print_memory_info();
 	serial_init();
-	//printf("Send byte: %02X\n", R_SB);
+	printf("Send byte: %02X\n", R_SB);
 	//printf("Serial Starting, RAM left %d\n", esp_get_free_heap_size());
 	fill_output_queue(R_SB);
 	generate_clock = use_internal_clock;
@@ -248,7 +286,7 @@ void serial_exchange(int use_internal_clock)
 		
 	}
 	BaseType_t xReturned;
-	xReturned = xTaskCreatePinnedToCore(input_handler_task, "input_handler_task", 2048, NULL, 10, NULL, 1);
+	xReturned = xTaskCreatePinnedToCore(input_handler_task, "input_handler_task", 2048, NULL, 23, &current_handler_task, 1);
 	if( xReturned != pdPASS ) {
 		printf("TASK CREATE FAILED!!\n");
 		clean_up();
