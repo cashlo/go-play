@@ -11,6 +11,8 @@
 #include "esp32/rom/gpio.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"
+
 
 
 #include "freertos/FreeRTOS.h"
@@ -83,7 +85,7 @@ void serial_clock_low() {
 		if (xQueueReceiveFromISR(output_queue, &output_bit, NULL) != pdTRUE) {
 			ESP_EARLY_LOGE("SERIAL", "Queue receive failed in ISR");
 		}
-		ESP_EARLY_LOGE("SERIAL", "Setting output bit: %d, bit %d", output_bit, edge_counter);
+		// ESP_EARLY_LOGE("SERIAL", "Setting output bit: %d, bit %d", output_bit, edge_counter);
 		//printf("serial_clock_low() o=%02X sb=%02X\n", output, R_SB);
 	}
 	ESP_ERROR_CHECK(gpio_set_level(SERIAL_OUT, output_bit));
@@ -96,7 +98,7 @@ void serial_clock_high() {
 			ESP_EARLY_LOGE("SERIAL", "Queue send failed in ISR");
 		}
 		edge_counter--;
-		ESP_EARLY_LOGE("SERIAL", "Input bit: %d, %d bits remaining", input_bit, edge_counter);
+		// ESP_EARLY_LOGE("SERIAL", "Input bit: %d, %d bits remaining", input_bit, edge_counter);
 		//printf("serial_clock_high() i=%02X sb=%02X\n", input, R_SB);
 	}
 }
@@ -210,7 +212,7 @@ void input_handler_task() {
             break;
         }
 
-		// printf("Serial bit received: %01X, data_counter:%02X, internal_counter:%03X, this_handler_id:%03X\n", input_bit, data_counter, internal_counter, this_handler_id);
+		printf("Serial bit received: %01X, data_counter:%02X, internal_counter:%03X, this_handler_id:%03X\n", input_bit, data_counter, internal_counter, this_handler_id);
 		data <<= 1;
 		data |= input_bit;
 		if(data_counter == 1) {
@@ -253,10 +255,17 @@ void external_interupt_init() {
 	printf("Setting up external interrupt...\n");
 	ESP_ERROR_CHECK(gpio_set_intr_type(SERIAL_CLOCK, GPIO_INTR_ANYEDGE));
 	if (!gpio_isr_service_running) {
-		ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT));
+		ESP_ERROR_CHECK(gpio_install_isr_service(
+            ESP_INTR_FLAG_LEVEL3 |  // Higher priority
+            ESP_INTR_FLAG_IRAM |    // Run from IRAM (faster)
+            ESP_INTR_FLAG_EDGE      // Confirm edge-triggered behavior
+		));
 		gpio_isr_service_running = 1;
 	}
+
 	ESP_ERROR_CHECK(gpio_isr_handler_add(SERIAL_CLOCK, gpio_isr_handler, (void*) 0));
+
+
 }
 
 void fill_output_queue(int data){
